@@ -1,0 +1,1214 @@
+// Copyright (c) 2007-2018 LG Electronics, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * @mainpage
+ *
+ * <h1>PmLogLib</h1>
+ *
+ * This library supports instrumenting code to produce runtime text output
+ * to indicate run status.
+ * We differentiate output into two types, tracing and logging.
+ *
+ * Tracing code is for detailed debugging for use by individual component
+ * development.  It is turned on only locally and only as needed, and is
+ * *not* included in the main build or release product.  The system
+ * support for tracing code will not be as efficient in this case as it
+ * will lean more towards ease of use.
+ *
+ * Logging code, on the other hand, is included in the main build and
+ * release product.  The purpose is to log errors and important diagnostics
+ * information in the device logs.
+ *
+ * Logging code may also support more verbose diagnostic
+ * levels which may be turned on dynamicly as needed on the device.  The
+ * intent of the system is that logging code which is not enabled has
+ * minimal performance impact.  In particular, a logging call which is not
+ * enabled should not result in a library call or evaluation of parameters.
+ * This is enabled by requiring logging clients to initialize a logging
+ * context that is managed by the PmLog system.  The context includes a
+ * memory field that can be quickly checked by the logging call to know
+ * whether the call is enabled.
+ *
+ * <em>Example usage:</em>
+ *
+ * @code
+ *	PmLogContext	gMyContext;
+ *
+ *	void MyComponentInit(void)
+ *	{
+ * 		// Get a pointer to the context for this component.
+ * 		// The context is created if it does not already exist.
+ * 		PmLogGetContext("PmMyComponent", &gMyContext);
+ *	}
+ *
+ *	void MyComponentRun(void)
+ *	{
+ * 		int err;
+ *
+ *		PmLogDebug(gMyContext, "Calling Foo");
+ * 		err = Foo();
+ * 		if (err)
+ * 		{
+ *			PmLogError(gMyContext, "FOOERR", 1, PMLOGKFV(ERROR_CODE,"%d",err), "");
+ * 		}
+ * 	}
+ * @endcode
+ *
+ **********************************************************************/
+
+/**
+* @brief  This header file specifies the public interface to PmLogLib
+*
+* @file PmLogLib.h
+* <hr>
+**/
+
+#ifndef PMLOGLIB_H
+#define PMLOGLIB_H
+
+#undef PMLOGLIB_ENABLE_LOGGING
+#define PMLOGLIB_ENABLE_LOGGING @PMLOG_ENABLE_LOGGING@
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+
+#include "PmLogMsg.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+
+//#####################################################################
+
+
+// GCC supplies the __attribute__ extension which we take advantage of.
+//
+// In particular we use the 'format' attribute that tells GCC to do
+// 'printf'-style checking, e.g. that the variable arguments match
+// the format string in type and number.  E.g. "%s (%d)" would require
+// a character string and integer parameters to follow, else a compiler
+// warning would result.
+
+/* If we're not using GNU C, elide __attribute__ */
+#ifndef __GNUC__
+#define __attribute__(x)  /* NOTHING */
+#endif
+
+
+// note: we use macros rather than inline function declarations to
+// avoid potential configuration and usage issues.
+
+
+//#####################################################################
+
+
+// Error class for this module.
+// This should really come from a common Palm header somewhere.
+#define PMLOG_ERR(offset)	(0x6C670000 | offset)
+
+// This is a context name which is used for the others's log messages.
+#define LEGACY_LOG "legacy-log"
+
+
+/*********************************************************************/
+/* PmLogErr */
+/**
+@brief  Type definition for error codes returned by this module's APIs.
+**********************************************************************/
+typedef enum
+{
+	kPmLogErr_None					= 0,
+	//------------------------------------------------
+	kPmLogErr_InvalidParameter		= PMLOG_ERR(1),
+	kPmLogErr_InvalidContextIndex	= PMLOG_ERR(2),
+	kPmLogErr_InvalidContext		= PMLOG_ERR(3),
+	kPmLogErr_InvalidLevel			= PMLOG_ERR(4),
+	kPmLogErr_InvalidFormat			= PMLOG_ERR(5),
+	kPmLogErr_InvalidData			= PMLOG_ERR(6),
+	kPmLogErr_NoData				= PMLOG_ERR(7),
+	kPmLogErr_TooMuchData			= PMLOG_ERR(8),
+	kPmLogErr_LevelDisabled			= PMLOG_ERR(9),
+	kPmLogErr_FormatStringFailed	= PMLOG_ERR(10),
+	kPmLogErr_TooManyContexts		= PMLOG_ERR(11),
+	kPmLogErr_InvalidContextName	= PMLOG_ERR(12),
+	kPmLogErr_ContextNotFound		= PMLOG_ERR(13),
+	kPmLogErr_BufferTooSmall		= PMLOG_ERR(14),
+	kPmLogErr_InvalidMsgID			= PMLOG_ERR(15),
+	kPmLogErr_EmptyMsgID			= PMLOG_ERR(16),
+	kPmLogErr_LoggingDisabled		= PMLOG_ERR(17),
+	//------------------------------------------------
+	kPmLogErr_Unknown				= PMLOG_ERR(999)
+} PmLogErr;
+
+/*********************************************************************/
+/* PmLogLevel */
+/**
+@brief  Type definition for discrete logging level.
+		The values are intentionally identical to the equivalent syslog
+		priority value.
+**********************************************************************/
+typedef enum
+{
+	kPmLogLevel_None		= -1,	/* no output */
+	kPmLogLevel_Emergency	= 0,	/* system is unusable */
+	kPmLogLevel_Alert		= 1,	/* action must be taken immediately */
+	kPmLogLevel_Critical	= 2,	/* critical conditions */
+	kPmLogLevel_Error		= 3,	/* error conditions */
+	kPmLogLevel_Warning		= 4,	/* warning conditions */
+	kPmLogLevel_Notice		= 5,	/* normal but significant condition */
+	kPmLogLevel_Info		= 6,	/* informational */
+	kPmLogLevel_Debug		= 7		/* debug-level messages */
+} PmLogLevel;
+
+typedef __attribute__((deprecated)) PmLogLevel PmLogLevel_deprecated;
+#define kPmLogLevel_Emergency ((PmLogLevel_deprecated) kPmLogLevel_Emergency)
+#define kPmLogLevel_Alert ((PmLogLevel_deprecated) kPmLogLevel_Alert)
+#define kPmLogLevel_Notice ((PmLogLevel_deprecated) kPmLogLevel_Notice)
+
+//#####################################################################
+
+
+// arbitrary maximum length of context name
+#define PMLOG_MAX_CONTEXT_NAME_LEN	63
+
+
+// This is the maximum number of contexts - calculated so that the
+// shared memory structure (PmLogGlobals) is kept <20K.
+// To bump this number, increase it so that the global shared
+// memory goes up by 4K page size
+#define PMLOG_MAX_NUM_CONTEXTS		282
+
+
+//#####################################################################
+
+
+/*********************************************************************/
+/* PmLogContext */
+/**
+@brief  Type definition for the logging context as returned by
+		PmLogGetContext.  This is a read-only data view.  Clients
+		should treat this as an opaque structure, however it is
+		referenced by the macro/inline functions here.
+**********************************************************************/
+
+typedef struct
+{
+	int	enabledLevel;	/* levels <= enabledLevel are enabled */
+	int flags;
+}
+PmLogContextInfo;
+
+typedef const PmLogContextInfo* PmLogContext;
+
+
+/*********************************************************************/
+/* kPmLogDefaultContext */
+/**
+@brief  For efficiency, every client component should get a context
+		using PmLogGetContext and use that for subsequent logging calls.
+		But, for simplicity of the client we'll also allow specifying
+		the default context via a special value.  But in that case,
+		the client-side level check can't be made inline, so every log
+		call will incur the cost of the library call and parameter
+		evaluation.
+**********************************************************************/
+#define kPmLogDefaultContext ((PmLogContext) NULL)
+// For backward compatibility
+#define kPmLogGlobalContext kPmLogDefaultContext
+
+
+/*********************************************************************/
+/* kPmLogDefaultContextName */
+/**
+@brief  This is the context name reported for the default context.
+		Note that it uses special characters so it won't conflict
+		with user-defined context names.
+**********************************************************************/
+#define kPmLogDefaultContextName "<default>"
+// For backward compatibility
+#define kPmLogGlobalContextName kPmLogDefaultContextName
+
+
+/*********************************************************************/
+/* kPmLogDefaultLibContextName */
+/**
+@brief  This is the context name reported for the default library context.
+		Note that it uses special characters so it won't conflict
+		with user-defined context names. This is always saved in
+		usercontext array[0]
+**********************************************************************/
+#define kPmLogDefaultLibContextName "<default-lib>"
+
+
+/*********************************************************************/
+/* PMLOG_IDENTIFIER */
+/**
+@brief  This is a identifier to distingish whether the log from
+        pmloglib or not.
+**********************************************************************/
+#define PMLOG_IDENTIFIER "[pmlog]"
+
+
+/*********************************************************************/
+/* PmLogGetNumContexts */
+/**
+@brief  Returns the number of defined contexts, including the global
+		context.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidParameter
+**********************************************************************/
+PmLogErr PmLogGetNumContexts(int* pNumContexts);
+
+
+/*********************************************************************/
+/* PmLogGetIndContext */
+/**
+@brief  Returns the context by index where index = 0..numContexts - 1.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidParameter
+**********************************************************************/
+PmLogErr PmLogGetIndContext(int contextIndex, PmLogContext* pContext);
+
+
+/*********************************************************************/
+/* PmLogFindContext */
+/**
+@brief  Returns the logging context for the named context, or
+		NULL if the context does not exist.
+
+		If contextName is NULL, an error is returned.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidParameter
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidContextName
+**********************************************************************/
+PmLogErr PmLogFindContext(const char* contextName, PmLogContext* pContext);
+
+
+/*********************************************************************/
+/* PmLogGetContext */
+/**
+@brief  Returns/creates the logging context for the named context.
+
+		If contextName is NULL, returns the global context.
+
+		Context names must be 1..31 characters long, and each
+		character must be one of A-Z, a-z, 0-9, '_', '-', '.'.
+
+		Component hierarchies can be indicated using '.' as the path
+		separator.
+		E.g. "FOO.BAR" would indicate the "BAR" subcomponent
+		of the "FOO" component.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidParameter
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidContextName
+**********************************************************************/
+PmLogErr PmLogGetContext(const char* contextName, PmLogContext* pContext);
+
+
+/*********************************************************************/
+/* PmLogGetContextInline */
+/**
+@brief  Returns/creates the logging context for the named context.
+		If contextName is NULL, returns the global context.
+		This form of the API is not for general use.  It is needed
+		to support the trace macros that want to use a named context,
+		but can't easily support a global variable to cache the context
+		and instead need to look it up every time.
+**********************************************************************/
+PmLogContext PmLogGetContextInline(const char* contextName);
+
+
+/*********************************************************************/
+/* PmLogGetContextName */
+/**
+@brief  Returns the name of the specified context into the specified
+		string buffer.
+		May be used for the global context.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidParameter
+**********************************************************************/
+PmLogErr PmLogGetContextName(PmLogContext context, char* contextName,
+	size_t contextNameBuffSize);
+
+
+/*********************************************************************/
+/* PmLogGetContextLevel */
+/**
+@brief  Gets the logging level for the specified context.
+		May be used for the global context.  This should generally not
+		be used by the components doing logging themselves.
+		Instead just use the PmLogPrint etc. APIs which will do
+		inline enabled checks.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidParameter
+**********************************************************************/
+PmLogErr PmLogGetContextLevel(PmLogContext context, PmLogLevel* levelP);
+
+
+/*********************************************************************/
+/* PmLogSetContextLevel */
+/**
+@brief  Sets the logging level for the specified context.
+		May be used for the global context.  This should generally not
+		be used by the components doing logging themselves.  Instead
+		the Debug Prefs / Log Manager should be used to set the
+		dynamic configuration.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+**********************************************************************/
+PmLogErr PmLogSetContextLevel(PmLogContext context, PmLogLevel level);
+
+
+/*********************************************************************/
+/* PmLogGetLibContext */
+/**
+@brief	Returns the context of the process loading the library.
+	May be used by shared libraries instead of PmLogGetContext call.
+	That is, libraries do not setup their own context, but make this
+	call to invoke the context of the calling process.
+	This makes it easier for processes to control the logging level
+	of library messages and direct them to specified file as needed.
+
+	Note: Libraries using this functionality are required to identify
+	it's messages with a pre-defined prefix. For Example: LS2 messages
+	can have the message ids prefixed with 'LS'. This is to identify
+	the library from which the messages came, since the context will
+	no more have the library name in them. The context will be context
+	name of the calling process.
+
+@return Context of the process loading the library. If the loading process
+	has setup a library context with PmLogSetLibContext, this context
+	is returned. Otherwise, return is the first context with which the
+	process is registered to pmloglib. If the process is not registered
+	with any context, then the fallback return is the default context.
+**********************************************************************/
+PmLogContext PmLogGetLibContext(void);
+
+
+/*********************************************************************/
+/* PmLogSetLibContext */
+/**
+@brief  Sets up context for a process where all library messages can
+	be directed.
+**********************************************************************/
+void PmLogSetLibContext(PmLogContext libContext);
+
+/*********************************************************************/
+/* PmLogSetDevMode */
+/**
+@brief  Sets up dev mode for debugging on production build
+**********************************************************************/
+void PmLogSetDevMode(bool isDevMode);
+
+
+//#####################################################################
+
+
+/*********************************************************************/
+/* PmLogIsEnabled */
+/**
+@brief  Returns true if and only if the specified message priority
+		is enabled in the specified context.
+
+proto:	bool PmLogIsEnabled(PmLogContext context, PmLogLevel level);
+**********************************************************************/
+#define PmLogIsEnabled(context, level)	\
+	(((context) == kPmLogGlobalContext) ||	\
+	 ((level) <= (context)->enabledLevel))
+
+
+//#####################################################################
+
+
+/*********************************************************************/
+/* PmLogString */
+/**
+
+@brief  Logs the specified formatted key-value pairs and free text
+        to the specified context.
+
+        This API should be used by apps and nodejs services to log
+        JSON stringified key-value pairs and free text
+
+@param  context context typically retrieved using PmLogGetContext()
+@param  level any of the kPmLogLevel_Info, kPmLogLevel_Warning etc.
+@param  msgid unique message id within this context for this message
+@param  kvpairs JSON stringified key-value pairs
+@param  message free text
+
+@return Error code:
+                        kPmLogErr_None
+                        kPmLogErr_InvalidContext
+                        kPmLogErr_InvalidLevel
+                        kPmLogErr_InvalidFormat
+                        kPmLogErr_InvalidMsgID
+**********************************************************************/
+#if PMLOGLIB_ENABLE_LOGGING
+#define PmLogString(context, level, msgid, kvpairs, message) \
+        (PmLogIsEnabled(context, level) \
+                ? PmLogString_(context, level, msgid, kvpairs, message) \
+                : kPmLogErr_LevelDisabled)
+#else
+#define PmLogString(context, level, msgid, kvpairs, message) \
+	PmLogStringDisabled_(context, level, msgid, kvpairs, message)
+#endif
+
+/*********************************************************************/
+/* PmLogString_ */
+/**
+
+@brief  Logs the specified formatted key-value pairs and free text
+        to the specified context. This should not be called directly,
+        instead the wrapper PmLogString should be called.
+
+@return Error code:
+                        kPmLogErr_None
+                        kPmLogErr_InvalidContext
+                        kPmLogErr_InvalidLevel
+                        kPmLogErr_InvalidFormat
+                        kPmLogErr_InvalidMsgID
+**********************************************************************/
+PmLogErr PmLogString_(PmLogContext context, PmLogLevel level,
+                const char* msgid, const char* kvpairs, const char* message);
+
+/*********************************************************************/
+/* PmLogStringDisabled_ */
+/**
+
+@brief  Logging stub, if logging is disabled.
+
+@return Error code: kPmLogErr_LoggingDisabled
+**********************************************************************/
+static inline PmLogErr PmLogStringDisabled_(
+		PmLogContext context __attribute__((unused)),
+		PmLogLevel level __attribute__((unused)),
+		const char* msgid __attribute__((unused)),
+		const char* kvpairs __attribute__((unused)),
+		const char* message __attribute__((unused)))
+{
+	return kPmLogErr_LoggingDisabled;
+}
+
+/*********************************************************************/
+/* PmLogPrint_ */
+/**
+@brief  Logs the specified formatted text to the specified context.
+
+		For efficiency, this API should not be used directly, but
+		instead use the wrappers (PmLogPrint, PmLogPrintError, ...) that
+		bypass the library call if the logging is not enabled.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+			kPmLogErr_InvalidFormat
+**********************************************************************/
+
+PmLogErr PmLogPrint_(PmLogContext context, PmLogLevel level,
+	const char* fmt, ...)
+     __attribute__((format(printf, 3, 4)))
+     __attribute__ ((deprecated));
+
+/*********************************************************************/
+/* PmLogPrintDisabled_ */
+/**
+
+@brief  Logging stub, if logging is disabled.
+
+@return Error code: kPmLogErr_LoggingDisabled
+**********************************************************************/
+static inline PmLogErr PmLogPrintDisabled_(
+		PmLogContext context __attribute__((unused)),
+		PmLogLevel level __attribute__((unused)),
+		const char* fmt __attribute__((unused)), ...)
+{
+	return kPmLogErr_LoggingDisabled;
+}
+
+/*********************************************************************/
+/* PmLogPrint */
+/**
+@brief  Logs the specified formatted text, tagged with the specified
+		level, to the specified context.
+
+proto:	PmLogErr PmLogPrint(PmLogContext context, PmLogLevel level,
+			const char* fmt, ...);
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+			kPmLogErr_InvalidFormat
+			kPmLogErr_LevelDisabled
+**********************************************************************/
+#if PMLOGLIB_ENABLE_LOGGING
+#define PmLogPrint(context, level, ...) \
+	(PmLogIsEnabled(context, level) \
+		? PmLogPrint_(context, level, __VA_ARGS__) \
+		: kPmLogErr_LevelDisabled)
+#else
+#define PmLogPrint(context, level, ...) \
+	PmLogPrintDisabled_(context, level, __VA_ARGS__)
+#endif
+
+
+/*********************************************************************/
+/* PmLogPrintError */
+/**
+@brief  Logs the specified formatted text, tagged as error level,
+		to the specified context.
+
+proto:	void PmLogPrintError(PmLogContext context,
+			const char* fmt, ...);
+**********************************************************************/
+#define	PmLogPrintError(context, ...)	\
+	(void) PmLogPrint(context, kPmLogLevel_Error, __VA_ARGS__)
+
+
+/*********************************************************************/
+/* PmLogPrintWarning */
+/**
+@brief  Logs the specified formatted text, tagged as warning level,
+		to the specified context.
+
+proto:	void PmLogPrintWarning(PmLogContext context,
+			const char* fmt, ...);
+**********************************************************************/
+#define	PmLogPrintWarning(context, ...)	\
+	(void) PmLogPrint(context, kPmLogLevel_Warning, __VA_ARGS__)
+
+
+/*********************************************************************/
+/* PmLogPrintInfo */
+/**
+@brief  Logs the specified formatted text, tagged as info level,
+		to the specified context.
+
+proto:	void PmLogPrintInfo(PmLogContext context,
+			const char* fmt, ...);
+**********************************************************************/
+#define	PmLogPrintInfo(context, ...)	\
+	(void) PmLogPrint(context, kPmLogLevel_Info, __VA_ARGS__)
+
+
+/*********************************************************************/
+/* PmLogPrintDebug */
+/**
+@brief  Logs the specified formatted text, tagged as debug level,
+		to the specified context.
+
+proto:	void PmLogPrintDebug(PmLogContext context,
+			const char* fmt, ...);
+**********************************************************************/
+#define	PmLogPrintDebug(context, ...)	\
+	(void) PmLogPrint(context, kPmLogLevel_Debug, __VA_ARGS__)
+
+
+//#####################################################################
+
+
+/*********************************************************************/
+/* PmLogVPrint_ */
+/**
+@brief  Logs the specified formatted text to the specified context.
+
+		For efficiency, this API should not be used directly, but
+		instead use the wrappers (PmLogVPrint, PmLogVPrintError, ...)
+		that bypass the library call if the logging is not enabled.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+			kPmLogErr_InvalidFormat
+**********************************************************************/
+PmLogErr PmLogVPrint_(PmLogContext context, PmLogLevel level,
+	const char* fmt, va_list args) __attribute__ ((deprecated));
+
+/*********************************************************************/
+/* PmLogVPrintDisabled_ */
+/**
+
+@brief  Logging stub, if logging is disabled.
+
+@return Error code: kPmLogErr_LoggingDisabled
+**********************************************************************/
+static inline PmLogErr PmLogVPrintDisabled_(
+		PmLogContext context __attribute__((unused)),
+		PmLogLevel level __attribute__((unused)),
+		const char* fmt __attribute__((unused)),
+		va_list args __attribute__((unused)))
+{
+	return kPmLogErr_LoggingDisabled;
+}
+
+/*********************************************************************/
+/* PmLogVPrint */
+/**
+@brief  Logs the specified formatted text, tagged with the specified
+		level, to the specified context.
+
+proto:	PmLogErr PmLogVPrint(PmLogContext context, PmLogLevel level,
+			const char* fmt, va_list args);
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+			kPmLogErr_InvalidFormat
+			kPmLogErr_LevelDisabled
+**********************************************************************/
+#if PMLOGLIB_ENABLE_LOGGING
+#define PmLogVPrint(context, level, fmt, args) \
+	(PmLogIsEnabled(context, level) \
+		? PmLogVPrint_(context, level, fmt, args) \
+		: kPmLogErr_LevelDisabled)
+#else
+#define PmLogVPrint(context, level, fmt, args) \
+	PmLogVPrintDisabled_(context, level, fmt, args)
+#endif
+
+/*********************************************************************/
+/* PmLogVPrintError */
+/**
+@brief  Logs the specified formatted text, tagged as error level,
+		to the specified context.
+
+proto:	void PmLogVPrintError(PmLogContext context,
+			const char* fmt, va_list args);
+**********************************************************************/
+#define	PmLogVPrintError(context, fmt, args)	\
+	(void) PmLogVPrint(context, kPmLogLevel_Error, fmt, args)
+
+
+/*********************************************************************/
+/* PmLogVPrintWarning */
+/**
+@brief  Logs the specified formatted text, tagged as warning level,
+		to the specified context.
+
+proto:	void PmLogVPrintWarning(PmLogContext context,
+			const char* fmt, va_list args);
+**********************************************************************/
+#define	PmLogVPrintWarning(context, fmt, args)	\
+	(void) PmLogVPrint(context, kPmLogLevel_Warning, fmt, args)
+
+
+/*********************************************************************/
+/* PmLogVPrintInfo */
+/**
+@brief  Logs the specified formatted text, tagged as info level,
+		to the specified context.
+
+proto:	void PmLogVPrintInfo(PmLogContext context,
+			const char* fmt, va_list args);
+**********************************************************************/
+#define	PmLogVPrintInfo(context, fmt, args)	\
+	(void) PmLogVPrint(context, kPmLogLevel_Info, fmt, args)
+
+
+/*********************************************************************/
+/* PmLogVPrintDebug */
+/**
+@brief  Logs the specified formatted text, tagged as debug level,
+		to the specified context.
+
+proto:	void PmLogVPrintDebug(PmLogContext context,
+			const char* fmt, va_list args);
+**********************************************************************/
+#define	PmLogVPrintDebug(context, fmt, args)	\
+	(void) PmLogVPrint(context, kPmLogLevel_Debug, fmt, args)
+
+
+//#####################################################################
+
+
+/*********************************************************************/
+/* PmLogDumpFormat */
+/**
+@brief  Placeholder struct.  Later we will allow passing in a struct
+		of parameters for explicitly controlling the data dump formatting,
+		e.g. allow specifying label offset, width of columns, etc.
+		For now just use the magic value kPmLogDumpFormatDefault which
+		will correspond to canonical hex + ASCII dump.
+**********************************************************************/
+struct PmLogDumpFormat;
+typedef struct PmLogDumpFormat PmLogDumpFormat;
+
+#define kPmLogDumpFormatDefault	((const PmLogDumpFormat*) NULL)
+
+
+/*********************************************************************/
+/* PmLogDumpData_ */
+/**
+@brief  Logs the specified binary data as text dump to the specified
+		context. Specify kPmLogDumpFormatDefault for the formatting
+		parameter.
+
+		For efficiency, this API should not be used directly, but
+		instead use the wrappers (PmLogDumpData, ...) that
+		bypass the library call if the logging is not enabled.
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+			kPmLogErr_InvalidFormat
+			kPmLogErr_LevelDisabled
+			kPmLogErr_NoData
+			kPmLogErr_InvalidData
+**********************************************************************/
+PmLogErr PmLogDumpData_(PmLogContext context, PmLogLevel level,
+	const void* data, size_t numBytes, const PmLogDumpFormat* format);
+
+/*********************************************************************/
+/* PmLogDumpDataDisabled_ */
+/**
+
+@brief  Logging stub, if logging is disabled.
+
+@return Error code: kPmLogErr_LoggingDisabled
+**********************************************************************/
+static inline PmLogErr PmLogDumpDataDisabled_(
+		PmLogContext context __attribute__((unused)),
+		PmLogLevel level __attribute__((unused)),
+		const void* data __attribute__((unused)),
+		size_t numBytes __attribute__((unused)),
+		const PmLogDumpFormat* format __attribute__((unused)))
+{
+	return kPmLogErr_LoggingDisabled;
+}
+
+/*********************************************************************/
+/* PmLogDumpData */
+/**
+@brief  Logs the specified binary data as text dump to the specified
+		context.  Specify kPmLogDumpFormatDefault for the formatting
+		parameter.
+
+proto:	PmLogErr PmLogDumpData(PmLogContext context, PmLogLevel level,
+			const void* data, size_t numBytes,
+			const PmLogDumpFormat* format);
+
+@return Error code:
+			kPmLogErr_None
+			kPmLogErr_InvalidContext
+			kPmLogErr_InvalidLevel
+			kPmLogErr_InvalidFormat
+			kPmLogErr_LevelDisabled
+			kPmLogErr_NoData
+			kPmLogErr_InvalidData
+**********************************************************************/
+#if PMLOGLIB_ENABLE_LOGGING
+#define PmLogDumpData(context, level, data, numBytes, format) \
+	(PmLogIsEnabled(context, level) \
+		? PmLogDumpData_(context, level, data, numBytes, format) \
+		: kPmLogErr_LevelDisabled)
+#else
+#define PmLogDumpData(context, level, data, numBytes, format) \
+	PmLogDumpDataDisabled_(context, level, data, numBytes, format)
+#endif
+
+
+/*********************************************************************/
+/* PmLogDumpDataError */
+/**
+@brief  Logs the specified binary data as text dump, tagged as error level,
+		to the specified context.
+
+proto:	void PmLogDumpDataError(PmLogContext context,
+			const void* data, size_t numBytes,
+			const PmLogDumpFormat* format);
+**********************************************************************/
+#define	PmLogDumpDataError(context, data, numBytes, format)	\
+	(void) PmLogDumpData(context, kPmLogLevel_Error, data, numBytes, format)
+
+
+/*********************************************************************/
+/* PmLogDumpDataWarning */
+/**
+@brief  Logs the specified binary data as text dump, tagged as warning level,
+		to the specified context.
+
+proto:	void PmLogDumpDataWarning(PmLogContext context,
+			const void* data, size_t numBytes,
+			const PmLogDumpFormat* format);
+**********************************************************************/
+#define	PmLogDumpDataWarning(context, data, numBytes, format)	\
+	(void) PmLogDumpData(context, kPmLogLevel_Warning, data, numBytes, format)
+
+
+/*********************************************************************/
+/* PmLogDumpDataInfo */
+/**
+@brief  Logs the specified binary data as text dump, tagged as info level,
+		to the specified context.
+
+proto:	void PmLogDumpDataInfo(PmLogContext context,
+			const void* data, size_t numBytes,
+			const PmLogDumpFormat* format);
+**********************************************************************/
+#define	PmLogDumpDataInfo(context, data, numBytes, format)	\
+	(void) PmLogDumpData(context, kPmLogLevel_Info, data, numBytes, format)
+
+
+/*********************************************************************/
+/* PmLogDumpDataDebug */
+/**
+@brief  Logs the specified binary data as text dump, tagged as debug level,
+		to the specified context.
+
+proto:	void PmLogDumpDataDebug(PmLogContext context,
+			const void* data, size_t numBytes,
+			const PmLogDumpFormat* format);
+**********************************************************************/
+#define	PmLogDumpDataDebug(context, data, numBytes, format)	\
+	(void) PmLogDumpData(context, kPmLogLevel_Debug, data, numBytes, format)
+
+
+//#####################################################################
+
+
+// Trace support
+
+
+/*********************************************************************/
+/* PMLOG_TRACES_ENABLED */
+/**
+	The client of this header file needs to define PMLOG_TRACES_ENABLED
+	in their makefile or .c file before including the header.  Otherwise
+	by default traces are disabled (i.e. not compiled).
+**********************************************************************/
+
+//! The ENABLE_WHITELIST macro can be defined to restrict logging
+//! to whitelist logs
+#if PMLOG_TRACES_ENABLED && !ENABLE_WHITELIST
+
+	#ifndef PMLOG_TRACE_CONTEXT
+		#ifdef PMLOG_TRACE_COMPONENT
+			#define PMLOG_TRACE_CONTEXT	\
+				PmLogGetContextInline(PMLOG_TRACE_COMPONENT)
+		#else
+			#define PMLOG_TRACE_CONTEXT		kPmLogGlobalContext
+		#endif
+	#endif
+
+	#define	PMLOG_TRACE(...)	\
+		PmLogDebug(PMLOG_TRACE_CONTEXT, __VA_ARGS__)
+
+	#define	PMLOG_TRACE_DATA(p, n)	\
+		(void) PmLogDumpData(PMLOG_TRACE_CONTEXT, kPmLogLevel_Debug, p, n, \
+			kPmLogDumpFormatDefault)
+
+#else
+
+	#define	PMLOG_TRACE(...)
+	#define	PMLOG_TRACE_DATA(p, n)
+
+#endif
+
+//#####################################################################
+
+
+/***********************************************************************
+ * PmLogLevelToString
+ *
+ * Given a numeric level value, returning the matching symbolic string.
+ * -1 (kPmLogLevel_None)      => "none"
+ *  0 (kPmLogLevel_Emergency) => "emerg"
+ * etc.
+ * Returns NULL if the level is not valid.
+ ***********************************************************************/
+const char* PmLogLevelToString(PmLogLevel level);
+
+
+/***********************************************************************
+ * PmLogStringToLevel
+ *
+ * Given a symbolic level string, returning the matching numeric value.
+ * "none"  => -1 (kPmLogLevel_None)
+ * "emerg" =>  0 (kPmLogLevel_Emergency)
+ * etc.
+ * Returns NULL if the level string is not matched.
+ ***********************************************************************/
+const int* PmLogStringToLevel(const char* levelStr);
+
+
+//#####################################################################
+
+
+/***********************************************************************
+ * PmLogFacilityToString
+ *
+ * Given a numeric facility value, returning the matching symbolic string.
+ * LOG_KERN => "kern"
+ * LOG_USER => "user"
+ * etc.
+ * Returns NULL if the facility is not valid.
+ ***********************************************************************/
+const char* PmLogFacilityToString(int facility);
+
+
+/***********************************************************************
+ * PmLogStringToFacility
+ *
+ * Given a symbolic facility string, returning the matching numeric value.
+ * "kern" => LOG_KERN
+ * "user" =>  LOG_USER
+ * etc.
+ * Returns NULL if the facility string is not matched.
+ ***********************************************************************/
+const int* PmLogStringToFacility(const char* facilityStr);
+
+
+//#####################################################################
+
+
+/***********************************************************************
+ * PmLogGetErrDbgString
+ *
+ * Given the numeric error code value, returning a matching symbolic
+ * string.  For debugging only, never to appear in user interface!
+ ***********************************************************************/
+const char* PmLogGetErrDbgString(PmLogErr logErr);
+
+
+//#####################################################################
+
+/*********************************************************************/
+/* PMLOGKFV */
+/**
+@brief  This macro is used for building a key value pair, where value
+        is not a string literal. If value is a string literal then use
+	PMLOGKS macro instead.
+
+	Ex: PMLOGKFV("APP_ID", "%d", 99);
+
+@param  literal_key string containing the key
+@param  literal_fmt string specifying the format of the value
+@param  value value corresponding to the format type specifid in literal_fmt
+**********************************************************************/
+#define PMLOGKFV(literal_key, literal_fmt, value) \
+	literal_key, literal_fmt, value
+
+/*********************************************************************/
+/* PMLOGKS */
+/**
+@brief  This macro is used for building a key value pair, where value
+        is a string literal. Use PMLOGKFV macro in case, value is NOT a
+	string literal.
+
+	Ex: PMLOGKS("APP_NAME", "Calculator");
+
+@param  literal_key string containing the key
+@param  string_value string containing the value
+**********************************************************************/
+#define PMLOGKS(literal_key, string_value) \
+	literal_key, "\"%s\"", string_value
+
+/*********************************************************************/
+/* PMLOGJSON */
+/**
+@brief  This macro is used for building a JSON key value pair, where
+        value is a JSON object.
+
+	Ex: PMLOGJSON("KEY", JSON_OBJECT);
+	    PMLOGJSON("MYKEY","{\"KEY\":{\"SUB_KEY\":\"SUB_VALUE\"}\"}
+
+@param  literal_key string containing the key
+@param  json_value stringified JSON object
+**********************************************************************/
+#define PMLOGJSON(literal_key, json_value) \
+	literal_key, "%s", json_value
+
+/*********************************************************************/
+/* _PmLogMsgKV */
+/**
+@brief  Logs the specified key value pair(s) and formatted text,
+        tagged at given level, to the specified context.
+
+	Instead of using this API, use the wrappers like PmLogMsg(),
+	PmLogError() etc.
+
+@param  flags flags is used for identifying revision of this API and to
+	maintain backward compatibility
+**********************************************************************/
+extern PmLogErr _PmLogMsgKV(PmLogContext context, PmLogLevel level,
+		unsigned int flags, const char *msgid, size_t kv_count,
+		const char *check_keywords, const char *check_formats,
+		const char *fmt, ...)
+__attribute__((format(printf, 8, 9)));
+
+/*********************************************************************/
+/* _PmLogMsgKVDisabled */
+/**
+
+@brief  Logging stub, if logging is disabled.
+
+@return Error code: kPmLogErr_LoggingDisabled
+**********************************************************************/
+static inline PmLogErr _PmLogMsgKVDisabled(
+		PmLogContext context __attribute__((unused)),
+		PmLogLevel level __attribute__((unused)),
+		const char *msgid __attribute__((unused)),
+		size_t kv_count __attribute__((unused)),
+		...)
+{
+	return kPmLogErr_LoggingDisabled;
+}
+
+/*********************************************************************/
+/* PmLogMsg */
+/**
+@brief  Logs the specified key value pair(s) and formatted text,
+        tagged at given level, to the specified context.
+
+	Ex: PmLogMsg(mycontext, Info, "APP_LAUNCHED", 1,
+	PMLOGKS("APP_NAME", "Calculator"), "");
+
+proto:	void PmLogMsg(PmLogContext context, PmLogLevel level,
+	const char *msgid, size_t kv_count, ...);
+
+@param  context context typically retrieved using PmLogGetContext()
+@param  level_suffix any of the level suffixes like Error, Warning etc.
+@param  msgid unique message id within this context for this message
+@param  kv_count number of key value pairs in this message
+@param  ... variable argument list containing, kv_count number of key
+		value pairs built using either PMLOGKS() or PMLOGKFV()
+		macros and at least an empty free string
+
+@return ::PmLogErr
+**********************************************************************/
+#if PMLOGLIB_ENABLE_LOGGING
+#define PmLogMsg(context, level_suffix, msgid, kv_count, ...) \
+	(PmLogIsEnabled(context, kPmLogLevel_##level_suffix) \
+		? _PmLogMsgKV##kv_count(context, level_suffix, msgid, __VA_ARGS__) \
+		: kPmLogErr_LevelDisabled)
+#else
+#define PmLogMsg(context, level_suffix, msgid, kv_count, ...) \
+	_PmLogMsgKVDisabled(context, kPmLogLevel_##level_suffix, msgid, kv_count, __VA_ARGS__)
+#endif
+
+/*********************************************************************/
+/* PmLogCritical */
+/**
+@brief  Logs the specified key value pair(s) and formatted text,
+        tagged as Critical level, to the specified context.
+
+proto:	void PmLogCritical(PmLogContext context, const char *msgid,
+		size_t kv_count, ...);
+**********************************************************************/
+#define	PmLogCritical(context, msgid, kv_count, ...) \
+		PmLogMsg(context, Critical, msgid, kv_count, __VA_ARGS__)
+
+/*********************************************************************/
+/* PmLogError */
+/**
+@brief  Logs the specified key value pair(s) and formatted text,
+        tagged as Error level, to the specified context.
+
+proto:	void PmLogError(PmLogContext context, const char *msgid,
+		size_t kv_count, ...);
+**********************************************************************/
+#define	PmLogError(context, msgid, kv_count, ...) \
+		PmLogMsg(context, Error, msgid, kv_count, __VA_ARGS__)
+
+/*********************************************************************/
+/* PmLogWarning */
+/**
+@brief  Logs the specified key value pair(s) and formatted text,
+        tagged as Warning level, to the specified context.
+
+proto:	void PmLogWarning(PmLogContext context, const char *msgid,
+		size_t kv_count, ...);
+**********************************************************************/
+#define	PmLogWarning(context, msgid, kv_count, ...) \
+		PmLogMsg(context, Warning, msgid, kv_count, __VA_ARGS__)
+
+/*********************************************************************/
+/* PmLogInfo */
+/**
+@brief  Logs the specified key value pair(s) and formatted text,
+        tagged as Info level, to the specified context.
+
+proto:	void PmLogInfo(PmLogContext context, const char *msgid,
+		size_t kv_count, ...);
+**********************************************************************/
+#define	PmLogInfo(context, msgid, kv_count, ...) \
+		PmLogMsg(context, Info, msgid, kv_count, __VA_ARGS__)
+
+/*********************************************************************/
+/* PmLogPerf */
+/**
+@brief  Logs the monotonic clock with millisecond precision
+        as a key and value pair,
+        which is tagged as Info level to the specified context.
+        key value pairs can take up to 9. (0 <= kv_count <= 9)
+
+proto:	void PmLogInfoWithClock(PmLogContext context, const char *msgid,
+		size_t kv_count, ...);
+**********************************************************************/
+#define PmLogInfoWithClock(context, msgid, kv_count, ...)      \
+	do {                                                        \
+		struct timespec ts;                                     \
+		clock_gettime(CLOCK_MONOTONIC, &ts);                    \
+		_PmLogMsgClock##kv_count(context, Info, msgid,          \
+		  "CLOCK", "%ld.%03d", ts.tv_sec, ts.tv_nsec / 1000000, \
+		  __VA_ARGS__);                                         \
+	} while (0)
+
+/*********************************************************************/
+
+/*********************************************************************/
+/* PmLogDebug */
+/**
+@brief  Logs the specified formatted text, tagged as Debug level,
+        to the specified context.
+
+proto:	void PmLogDebug(PmLogContext context, ...);
+**********************************************************************/
+#define	PmLogDebug(context, ...) \
+		PmLogMsg(context, Debug, NULL, 0, __VA_ARGS__)
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // PMLOGLIB_H
