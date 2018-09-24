@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+prefix=@WEBOS_INSTALL_PREFIX@
 includedir=@WEBOS_INSTALL_INCLUDEDIR@
 
 Name: PmLogLib-headers
