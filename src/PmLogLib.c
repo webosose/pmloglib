@@ -1,4 +1,4 @@
-// Copyright (c) 2007-2018 LG Electronics, Inc.
+// Copyright (c) 2007-2019 LG Electronics, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -287,7 +287,7 @@ void GetPidStr(PmLogContext_ *context,char *ptidStr,long int ptidStrLen)
             snprintf(ptidStr, ptidStrLen, "[%d]", (int) pid);
         }
     } else {
-        g_strlcpy(ptidStr, "[]", ptidStrLen);
+        (void) g_strlcpy(ptidStr, "[]", ptidStrLen);
     }
 }
 
