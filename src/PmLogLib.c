@@ -1,4 +1,4 @@
-// Copyright (c) 2007-2019 LG Electronics, Inc.
+// Copyright (c) 2007-2020 LG Electronics, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -810,7 +810,7 @@ static void parse_config_flags(jvalue_ref j_context, const gchar *file_name, con
     PmLogContext  context;
     PmLogContext_ *context_ptr;
     int           err;
-    char          ptidStr[ PIDSTR_LEN ];
+    char          ptidStr[ PIDSTR_LEN ] = "";
 
     err = PmLogGetContext(context_name, &context);
     if (kPmLogErr_None != err) {
