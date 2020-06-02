@@ -1,0 +1,4 @@
+Open Source Software Package:
+- name: webOSOSE-pmloglib
+  source: https://github.com/webosose/pmloglib
+  license: Apache-2.0
