@@ -31,6 +31,17 @@
                                 {"filter" : "*.*", "output" : "devlog"}
                         ]
 
+                },
+                {
+                        "name" : "bootManager",
+                        "level" : "debug",
+                        "logProcessIds" : true,
+                        "logThreadIds" : false,
+                        "logToConsole" : false,
+                        "rules" : [
+                                {"filter" : "*.*", "output" : "stdlog"}
+                        ]
+
 		}
 	],
 
@@ -53,7 +64,7 @@
                         "maxSize" : 2000,
                         "rotations" : 5
 
-		}
+                }
         ],
 
         "contextLogging" : false
