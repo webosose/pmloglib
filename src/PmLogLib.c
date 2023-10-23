@@ -942,7 +942,7 @@ static bool parse_config_overrides(jvalue_ref j_overrides, const gchar *file_nam
                 }
             }
             if (log_err != kPmLogErr_None) {
-                ErrPrint(COMPONENT_PREFIX, "[]", "SET_CTX_LEVEL_FAIL {\"file\":\"%s\", \"index\":%d} Failed to set log level for %s: %s",
+                ErrPrint(COMPONENT_PREFIX, "[]", "SET_CTX_LEVEL_FAIL {\"file\":\"%s\", \"index\":%zd} Failed to set log level for %s: %s",
                          file_name, i, context_name, PmLogGetErrDbgString(log_err));
             }
         }
@@ -2694,8 +2694,8 @@ static PmLogErr DumpData_OffsetHexAscii(PmLogContext_* contextP,
             if (i < lineBytes)
             {
                 b = srcP[ i ];
-                *lineP++ = kHexChars[ b >> 4 ];
-                *lineP++ = kHexChars[ b & 0x0F ];
+                *lineP++ = kHexChars[(unsigned)(b >> 4) & 0x0F ];
+                *lineP++ = kHexChars[(unsigned)b & 0x0F ];
             }
             else
             {
