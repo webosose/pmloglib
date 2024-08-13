@@ -2018,7 +2018,7 @@ static void PrvLogToConsole(FILE* out, const char* identStr,
         endStr = "\n";
     }
 
-    fprintf(out, "%s%s%s%s%s", identStr, ptidStr, componentStr, s, endStr);
+    (void)fprintf(out, "%s%s%s%s%s", identStr, ptidStr, componentStr, s, endStr); //coverity
 }
 
 
