@@ -1190,7 +1190,7 @@ proto:	void PmLogInfoWithClock(PmLogContext context, const char *msgid,
 		struct timespec ts;                                     \
 		clock_gettime(CLOCK_MONOTONIC, &ts);                    \
 		_PmLogMsgClock##kv_count(context, Info, msgid,          \
-		  "CLOCK", "%ld.%03d", ts.tv_sec, ts.tv_nsec / 1000000, \
+		  "CLOCK", "%jd.%03ld", (intmax_t) ts.tv_sec, ts.tv_nsec / 1000000, \
 		  __VA_ARGS__);                                         \
 	} while (0)
 
